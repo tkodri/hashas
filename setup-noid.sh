@@ -157,9 +157,9 @@ case "$MODE" in
   miner)
     log "starting node, internal proof pipeline (mode=miner)"
     if [ -n "$THREADS" ]; then
-      nohup ./parano1d --mode miner --cpu-threads "$THREADS" --data-dir "$DATADIR" >/dev/null 2>&1 &
+      nohup ./parano1d --mode miner --cpu-threads "$THREADS" --data-dir "$DATADIR" >/dev/null 2>&1 </dev/null &
     else
-      nohup ./parano1d --mode miner --data-dir "$DATADIR" >/dev/null 2>&1 &
+      nohup ./parano1d --mode miner --data-dir "$DATADIR" >/dev/null 2>&1 </dev/null &
     fi ;;
   extminer)
     MK="$HOME/.parano1d/mining.key"
@@ -167,10 +167,10 @@ case "$MODE" in
       head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$MK"; chmod 600 "$MK"
     fi
     log "starting node, external worker pipeline (mode=extminer)"
-    nohup ./parano1d --mode extminer --mining-key-file "$MK" --data-dir "$DATADIR" >/dev/null 2>&1 & ;;
+    nohup ./parano1d --mode extminer --mining-key-file "$MK" --data-dir "$DATADIR" >/dev/null 2>&1 </dev/null & ;;
   *)
     log "starting ordinary node (mode=node)"
-    nohup ./parano1d --data-dir "$DATADIR" >/dev/null 2>&1 & ;;
+    nohup ./parano1d --data-dir "$DATADIR" >/dev/null 2>&1 </dev/null & ;;
 esac
 
 log "waiting for RPC on 127.0.0.1:9601"

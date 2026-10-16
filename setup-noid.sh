@@ -18,6 +18,7 @@
 #   NOID_EXPECT_ADDRESS assert derived address      (optional, safety)
 #   NOID_SYSTEMD        1 = install+enable service  (default: 0)
 #   NOID_FORCE          1 = replace existing wallet  (default: 0)
+#   NOID_RPC_WAIT       seconds to wait for RPC      (default: 300)
 
 set -euo pipefail
 
@@ -153,13 +154,20 @@ if [ -n "$IMPORT_SECRET" ]; then
 fi
 
 # ---- start ----------------------------------------------------------------
+NODELOG="$PREFIX/parano1d.log"
+
+launch() {   # launch <args...>  — data-dir appended, output to log, stdin detached
+  nohup "$@" --data-dir "$DATADIR" >"$NODELOG" 2>&1 </dev/null &
+  NODEPID=$!
+}
+
 case "$MODE" in
   miner)
     log "starting node, internal proof pipeline (mode=miner)"
     if [ -n "$THREADS" ]; then
-      nohup ./parano1d --mode miner --cpu-threads "$THREADS" --data-dir "$DATADIR" >/dev/null 2>&1 </dev/null &
+      launch ./parano1d --mode miner --cpu-threads "$THREADS"
     else
-      nohup ./parano1d --mode miner --data-dir "$DATADIR" >/dev/null 2>&1 </dev/null &
+      launch ./parano1d --mode miner
     fi ;;
   extminer)
     MK="$HOME/.parano1d/mining.key"
@@ -167,19 +175,41 @@ case "$MODE" in
       head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$MK"; chmod 600 "$MK"
     fi
     log "starting node, external worker pipeline (mode=extminer)"
-    nohup ./parano1d --mode extminer --mining-key-file "$MK" --data-dir "$DATADIR" >/dev/null 2>&1 </dev/null & ;;
+    launch ./parano1d --mode extminer --mining-key-file "$MK" ;;
   *)
     log "starting ordinary node (mode=node)"
-    nohup ./parano1d --data-dir "$DATADIR" >/dev/null 2>&1 </dev/null & ;;
+    launch ./parano1d ;;
 esac
 
-log "waiting for RPC on 127.0.0.1:9601"
-ok=0
-for _ in $(seq 1 90); do
+log "node pid $NODEPID — log: $NODELOG"
+
+# ---- wait for RPC ---------------------------------------------------------
+# miner mode calibrates proof capacity before accepting RPC; on shared or
+# throttled CPUs that can take minutes. node mode is usually up in ~20-30s.
+WAIT="${NOID_RPC_WAIT:-300}"
+log "waiting for RPC on 127.0.0.1:9601 (max ${WAIT}s)"
+ok=0; waited=0
+for i in $(seq 1 "$WAIT"); do
+  waited=$i
   ./parano1d-cli status >/dev/null 2>&1 && { ok=1; break; }
+  if ! kill -0 "$NODEPID" 2>/dev/null; then
+    echo
+    warn "node exited during startup. last log lines:"
+    tail -n 25 "$NODELOG" 2>/dev/null | sed 's/^/    /'
+    die "node died before RPC came up (full log: $NODELOG)"
+  fi
+  if [ $((i % 15)) -eq 0 ]; then
+    printf '    ... %ss  %s\n' "$i" "$(tail -n1 "$NODELOG" 2>/dev/null | cut -c1-88)"
+  fi
   sleep 1
 done
-[ "$ok" = 1 ] || die "node did not come up; check manually"
+if [ "$ok" != 1 ]; then
+  echo
+  warn "RPC still down after ${WAIT}s — node is alive but slow. last log lines:"
+  tail -n 25 "$NODELOG" 2>/dev/null | sed 's/^/    /'
+  die "retry with a higher NOID_RPC_WAIT (full log: $NODELOG)"
+fi
+log "RPC up after ${waited}s"
 
 # ---- report ---------------------------------------------------------------
 echo

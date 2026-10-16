@@ -243,15 +243,39 @@ if [ -n "$EXPECT_ADDR" ]; then
 fi
 
 # ---- optional systemd -----------------------------------------------------
+# Auto-detects hosts with no usable systemd (containers, Codespaces, chroot,
+# WSL without init) and skips cleanly instead of dying at the very end.
 if [ "$USE_SYSTEMD" = "1" ]; then
+  sd_ok=1; sd_reason=""
   if [ "$(id -u)" -ne 0 ]; then
-    warn "NOID_SYSTEMD=1 needs root, skipping"
+    sd_ok=0; sd_reason="needs root"
+  elif ! command -v systemctl >/dev/null 2>&1; then
+    sd_ok=0; sd_reason="systemctl not installed"
+  elif [ ! -d /run/systemd/system ]; then
+    sd_ok=0; sd_reason="systemd is not the active init (container / Codespace / chroot)"
+  fi
+
+  if [ "$sd_ok" != 1 ]; then
+    warn "NOID_SYSTEMD=1 skipped: $sd_reason"
+    warn "the node is already running under the launcher. to restart it after reboot:"
+    warn "    $PREFIX/parano1d --mode $MODE --data-dir $DATADIR"
   else
     ARGS="--data-dir $DATADIR"
     case "$MODE" in
       miner)    ARGS="--mode miner ${THREADS:+--cpu-threads $THREADS} $ARGS" ;;
       extminer) ARGS="--mode extminer --mining-key-file $HOME/.parano1d/mining.key $ARGS" ;;
     esac
+
+    # hand the RPC port over: the launcher-owned node must release it first,
+    # otherwise the unit starts a second node and the bind fails
+    log "stopping launcher-owned node (pid $NODEPID) so systemd can own the service"
+    ./parano1d-cli stop >/dev/null 2>&1 || true
+    kill "$NODEPID" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      kill -0 "$NODEPID" 2>/dev/null || break
+      sleep 0.5
+    done
+
     cat > /etc/systemd/system/parano1d.service <<EOF
 [Unit]
 Description=Parano1d node
@@ -270,9 +294,20 @@ LimitNOFILE=65535
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload
-    systemctl enable --now parano1d
-    log "systemd unit installed and started"
+
+    systemctl daemon-reload || warn "systemctl daemon-reload failed"
+    if systemctl enable --now parano1d; then
+      log "systemd unit installed and started (parano1d.service)"
+      sleep 3
+      if systemctl is-active --quiet parano1d; then
+        log "service is active"
+      else
+        warn "service not active yet — check: journalctl -u parano1d -n 50"
+      fi
+    else
+      warn "systemctl enable --now failed — restarting under the launcher instead"
+      launch ./parano1d --mode "$MODE"
+    fi
   fi
 fi
 

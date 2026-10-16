@@ -40,10 +40,10 @@ KEYFILE="$DATADIR/wallet.key"
 MAGIC='noid_plain_key_1'
 
 # ---- helpers --------------------------------------------------------------
-hexval() {  # read bytes 16..48 of wallet.key as lowercase hex
+hexval() {  # read bytes 16..48 of wallet.key as lowercase hex, single line
   local f="$1"
   if command -v xxd >/dev/null 2>&1; then
-    xxd -p -s 16 -l 32 "$f"
+    xxd -p -c 256 -s 16 -l 32 "$f" | tr -d '\n'
   else
     python3 -c "import sys;print(open(sys.argv[1],'rb').read()[16:48].hex())" "$f"
   fi
